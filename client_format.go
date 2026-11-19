@@ -259,6 +259,10 @@ func (cf *clientFormat) readPacketRTP(payload []byte, header *rtp.Header, header
 
 	for _, pkt := range pkts {
 		cf.onPacketRTP(pkt)
+
+		if sv := cf.cm.c.syncView.Load(); sv != nil {
+			sv.push(cf.cm.media, cf.format, cf.rtpReceiver, pkt, now)
+		}
 	}
 
 	return true

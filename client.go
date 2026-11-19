@@ -549,6 +549,18 @@ type Client struct {
 	// authentication methods that the client is allowed to use.
 	// It defaults to all methods.
 	AllowedAuthMethods []auth.Method
+	// reorder window of the synchronized packet view (see OnPacketSync):
+	// packets are held back for this duration to allow cross-track
+	// reordering. It defaults to 500 milliseconds.
+	SyncReorderWindow time.Duration
+	// maximum number of packets buffered by the synchronized packet view,
+	// in both the reorder buffer and the outbound queue.
+	// It defaults to 512.
+	SyncQueueSize int
+	// policy applied by the synchronized packet view when its outbound
+	// queue is full (slow consumer).
+	// It defaults to ClientSyncQueuePolicyDropOldest.
+	SyncQueuePolicy ClientSyncQueuePolicy
 
 	//
 	// System functions (all optional)
@@ -587,6 +599,12 @@ type Client struct {
 	OnPacketsLost ClientOnPacketsLostFunc
 	// called when a non-fatal decode error occurs.
 	OnDecodeError ClientOnDecodeErrorFunc
+	// called when a RTP packet is available in the synchronized packet
+	// view, that merges inbound RTP packets of all medias into a single
+	// stream, sorted by wall-clock time (see SyncReorderWindow,
+	// SyncQueueSize and SyncQueuePolicy). If nil, the synchronized packet
+	// view is disabled. The callback must not call Close().
+	OnPacketSync ClientOnPacketSyncFunc
 
 	//
 	// private
@@ -629,6 +647,10 @@ type Client struct {
 	writer                *asyncprocessor.Processor
 	reader                *clientReader
 	timeDecoder           *rtptime.GlobalDecoder
+	syncView              atomic.Pointer[clientSyncView]
+	syncOutputPackets     atomic.Uint64
+	syncDroppedLate       atomic.Uint64
+	syncDroppedOverflow   atomic.Uint64
 	mustClose             bool
 	tcpFrame              *base.InterleavedFrame
 	tcpBuffer             []byte
@@ -680,6 +702,12 @@ func (c *Client) Start() error {
 	}
 	if c.UDPSourcePortRange == [2]uint16{0, 0} {
 		c.UDPSourcePortRange = [2]uint16{10000, 65535}
+	}
+	if c.SyncReorderWindow == 0 {
+		c.SyncReorderWindow = 500 * time.Millisecond
+	}
+	if c.SyncQueueSize == 0 {
+		c.SyncQueueSize = 512
 	}
 
 	// system functions
@@ -1131,6 +1159,18 @@ func (c *Client) startTransportRoutines() {
 	c.timeDecoder = &rtptime.GlobalDecoder{}
 	c.timeDecoder.Initialize()
 
+	if c.state == clientStatePlay && c.OnPacketSync != nil {
+		sv := &clientSyncView{
+			c:           c,
+			window:      c.SyncReorderWindow,
+			queueSize:   c.SyncQueueSize,
+			policy:      c.SyncQueuePolicy,
+			timeDecoder: c.timeDecoder,
+		}
+		sv.initialize()
+		c.syncView.Store(sv)
+	}
+
 	for _, cm := range c.setuppedMedias {
 		cm.start()
 	}
@@ -1174,6 +1214,12 @@ func (c *Client) stopTransportRoutines() {
 
 	for _, cm := range c.setuppedMedias {
 		cm.stop()
+	}
+
+	// close the synchronized packet view after medias have been stopped,
+	// flushing all queued packets in sorted order.
+	if sv := c.syncView.Swap(nil); sv != nil {
+		sv.close()
 	}
 
 	c.timeDecoder = nil
@@ -2611,6 +2657,16 @@ func (c *Client) PacketNTP(medi *description.Media, pkt *rtp.Packet) (time.Time,
 	cm := c.setuppedMedias[medi]
 	ct := cm.formats[pkt.PayloadType]
 	return ct.rtpReceiver.PacketNTP(pkt.Timestamp)
+}
+
+// SyncStats returns statistics of the synchronized packet view
+// (see OnPacketSync).
+func (c *Client) SyncStats() *ClientSyncStats {
+	return &ClientSyncStats{
+		OutputPackets:   c.syncOutputPackets.Load(),
+		DroppedLate:     c.syncDroppedLate.Load(),
+		DroppedOverflow: c.syncDroppedOverflow.Load(),
+	}
 }
 
 // Transport returns transport details.
