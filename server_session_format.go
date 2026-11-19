@@ -10,7 +10,6 @@ import (
 	"github.com/pion/rtp"
 
 	"github.com/bluenviron/gortsplib/v5/pkg/format"
-	"github.com/bluenviron/gortsplib/v5/pkg/liberrors"
 	"github.com/bluenviron/gortsplib/v5/pkg/rtpreceiver"
 	"github.com/bluenviron/gortsplib/v5/pkg/rtpsender"
 )
@@ -331,14 +330,19 @@ func (ssf *serverSessionFormat) writePacketRTPEncoded(
 		return nil
 	}
 
-	ok := ssf.ssm.ss.writer.Push(func() error {
-		return ssf.writePacketRTPInQueue(payload)
-	})
-	if !ok {
-		return liberrors.ErrServerWriteQueueFull{}
+	entry := &serverSessionQueueEntry{
+		size: len(payload),
+		run: func() error {
+			return ssf.writePacketRTPInQueue(payload)
+		},
 	}
 
-	return nil
+	if ssf.ssm.ss.backpressure != nil {
+		entry.enqueuedAt = ssf.ssm.ss.s.timeNow()
+		entry.droppable = isDroppablePacket(ssf.ssm.media, ssf.format, pkt)
+	}
+
+	return ssf.ssm.ss.enqueuePacket(entry)
 }
 
 func (ssf *serverSessionFormat) writePacketRTPInQueueUDP(payload []byte) error {

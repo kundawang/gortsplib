@@ -106,6 +106,18 @@ type Server struct {
 	// Size of the queue of outbound packets.
 	// It defaults to 256.
 	WriteQueueSize int
+	// policy to apply when a reading session cannot keep up with the stream.
+	// It defaults to ServerSlowClientPolicyNone.
+	SlowClientPolicy ServerSlowClientPolicy
+	// maximum number of bytes that can accumulate in the outbound queue
+	// of a single reading session before SlowClientPolicy is applied.
+	// It defaults to 0 (no limit).
+	SlowClientMaxQueueBytes int
+	// maximum time a packet can remain in the outbound queue of a reading
+	// session before being considered stale and dropped, when the policy
+	// allows it.
+	// It defaults to 0 (no limit).
+	SlowClientMaxQueueAge time.Duration
 	// maximum size of outbound RTP / RTCP packets.
 	// This must be less than the IPv4/UDP MTU (1472 bytes).
 	// It defaults to 1472.
@@ -185,6 +197,15 @@ func (s *Server) Start() error {
 		s.WriteQueueSize = 256
 	} else if (s.WriteQueueSize & (s.WriteQueueSize - 1)) != 0 {
 		return fmt.Errorf("WriteQueueSize (%d) must be a power of two", s.WriteQueueSize)
+	}
+	if s.SlowClientPolicy < ServerSlowClientPolicyNone || s.SlowClientPolicy > ServerSlowClientPolicyDisconnect {
+		return fmt.Errorf("invalid SlowClientPolicy (%d)", s.SlowClientPolicy)
+	}
+	if s.SlowClientMaxQueueBytes < 0 {
+		return fmt.Errorf("SlowClientMaxQueueBytes (%d) must be greater than or equal to zero", s.SlowClientMaxQueueBytes)
+	}
+	if s.SlowClientMaxQueueAge < 0 {
+		return fmt.Errorf("SlowClientMaxQueueAge (%s) must be greater than or equal to zero", s.SlowClientMaxQueueAge)
 	}
 	if s.MaxPacketSize == 0 {
 		s.MaxPacketSize = udpMaxPayloadSize

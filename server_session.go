@@ -367,6 +367,8 @@ type ServerSession struct {
 	udpCheckStreamTimer   *time.Timer
 	writerMutex           sync.RWMutex
 	writer                *asyncprocessor.Processor
+	backpressure          *serverSessionBackpressure // play only
+	closeErr              error                      // set before ctxCancel by closeWithError
 	timeDecoder           *rtptime.GlobalDecoder
 	tcpFrame              *base.InterleavedFrame
 	tcpBuffer             []byte
@@ -404,6 +406,15 @@ func (ss *ServerSession) initialize() {
 
 // Close closes the ServerSession.
 func (ss *ServerSession) Close() {
+	ss.ctxCancel()
+}
+
+// closeWithError closes the ServerSession, making the session
+// terminate with the given error.
+func (ss *ServerSession) closeWithError(err error) {
+	// the write is synchronized with the read in runInner()
+	// through the context done channel.
+	ss.closeErr = err
 	ss.ctxCancel()
 }
 
@@ -507,6 +518,17 @@ func (ss *ServerSession) Stats() *SessionStats {
 	}()
 
 	stats := sessionStatsFromMedias(mediaStats)
+
+	ss.writerMutex.RLock()
+	bp := ss.backpressure
+	ss.writerMutex.RUnlock()
+
+	if bp != nil {
+		stats.OutboundRTPPacketsDropped = bp.droppedPackets.Load()
+		stats.OutboundQueuePackets = uint64(max(bp.queuedPackets.Load(), 0))
+		stats.OutboundQueueBytes = uint64(max(bp.queuedBytes.Load(), 0))
+	}
+
 	return &stats
 }
 
@@ -552,6 +574,12 @@ func (ss *ServerSession) createWriter() {
 		OnError: ss.writerError,
 	}
 	ss.writer.Initialize()
+
+	if ss.state == ServerSessionStatePrePlay && ss.s.SlowClientPolicy != ServerSlowClientPolicyNone {
+		ss.backpressure = &serverSessionBackpressure{
+			ss: ss,
+		}
+	}
 
 	ss.writerMutex.Unlock()
 }
@@ -722,6 +750,9 @@ func (ss *ServerSession) runInner() error {
 			return err
 
 		case <-ss.ctx.Done():
+			if ss.closeErr != nil {
+				return ss.closeErr
+			}
 			return liberrors.ErrServerTerminated{}
 		}
 	}
@@ -1549,6 +1580,21 @@ func (ss *ServerSession) writerError(ctx context.Context, err error) {
 	case <-ss.ctx.Done():
 	case ss.chWriterError <- err:
 	}
+}
+
+// enqueuePacket adds a packet to the outbound queue of the session,
+// applying the slow client policy when one is set.
+// It must be called with writerMutex held (at least for reading).
+func (ss *ServerSession) enqueuePacket(entry *serverSessionQueueEntry) error {
+	if ss.backpressure == nil {
+		ok := ss.writer.Push(entry.run)
+		if !ok {
+			return liberrors.ErrServerWriteQueueFull{}
+		}
+		return nil
+	}
+
+	return ss.backpressure.push(entry)
 }
 
 func (ss *ServerSession) isChannelPairInUse(channel int) bool {

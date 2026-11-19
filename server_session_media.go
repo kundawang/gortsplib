@@ -434,14 +434,18 @@ func (ssm *serverSessionMedia) writePacketRTCPEncoded(payload []byte) error {
 		return nil
 	}
 
-	ok := ssm.ss.writer.Push(func() error {
-		return ssm.writePacketRTCPInQueue(payload)
-	})
-	if !ok {
-		return liberrors.ErrServerWriteQueueFull{}
+	entry := &serverSessionQueueEntry{
+		size: len(payload),
+		run: func() error {
+			return ssm.writePacketRTCPInQueue(payload)
+		},
 	}
 
-	return nil
+	if ssm.ss.backpressure != nil {
+		entry.enqueuedAt = ssm.ss.s.timeNow()
+	}
+
+	return ssm.ss.enqueuePacket(entry)
 }
 
 func (ssm *serverSessionMedia) writePacketRTCPInQueueUDP(payload []byte) error {

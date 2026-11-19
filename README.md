@@ -40,6 +40,7 @@ Features:
     - Write streams with the UDP, UDP-multicast or TCP transport protocol
     - Compute and provide SSRC, RTP-Info to clients
     - Read ONVIF back channels
+    - Apply backpressure policies to slow clients (drop stale packets or disconnect)
 - Utilities
   - Parse RTSP elements
   - Encode/decode RTP packets into/from codec-specific frames

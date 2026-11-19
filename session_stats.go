@@ -115,6 +115,19 @@ type SessionStats struct {
 	// outbound RTCP packets
 	OutboundRTCPPackets uint64
 
+	// outbound RTP packets dropped by the slow client policy.
+	// It is different from zero only when Server.SlowClientPolicy
+	// is set.
+	OutboundRTPPacketsDropped uint64
+	// packets currently waiting in the outbound queue.
+	// It is different from zero only when Server.SlowClientPolicy
+	// is set.
+	OutboundQueuePackets uint64
+	// bytes currently waiting in the outbound queue.
+	// It is different from zero only when Server.SlowClientPolicy
+	// is set.
+	OutboundQueueBytes uint64
+
 	// media statistics
 	Medias map[*description.Media]SessionStatsMedia
 

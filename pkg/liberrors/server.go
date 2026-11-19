@@ -295,3 +295,16 @@ type ErrServerH264PacketizationMode0 struct{}
 func (e ErrServerH264PacketizationMode0) Error() string {
 	return "H264 packetization-mode=0 is not supported by the server"
 }
+
+// ErrServerSlowClient is an error that can be returned by a server.
+// It is generated when a reading session is closed because it cannot
+// keep up with the stream (see Server.SlowClientPolicy).
+type ErrServerSlowClient struct {
+	// Reason describes which limit has been exceeded.
+	Reason string
+}
+
+// Error implements the error interface.
+func (e ErrServerSlowClient) Error() string {
+	return "slow client: " + e.Reason
+}
