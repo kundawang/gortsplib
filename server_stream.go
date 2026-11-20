@@ -123,6 +123,14 @@ func (st *ServerStream) Close() {
 		ss.Close()
 	}
 
+	// release the H264 preheat caches deterministically instead of waiting
+	// for the garbage collector, so a closed stream keeps no cached packets.
+	for _, sm := range st.medias {
+		for _, sf := range sm.formats {
+			sf.preheat = nil
+		}
+	}
+
 	st.mutex.Unlock()
 }
 
@@ -381,6 +389,13 @@ func (st *ServerStream) readerSetActive(ss *ServerSession) {
 		}
 	} else {
 		st.activeUnicastReaders[ss] = struct{}{}
+
+		// H264 keyframe preheat. The stream mutex is held for the whole
+		// operation, so no live WritePacketRTP() can run and overtake the
+		// cached group on the session writer queue. Only this new reader is
+		// affected: packets are pushed onto its own queue, and the cached
+		// data is never mutated nor counted in stream-level statistics.
+		st.preheatReader(ss)
 	}
 }
 

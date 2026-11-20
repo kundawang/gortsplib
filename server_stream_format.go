@@ -41,6 +41,11 @@ type serverStreamFormat struct {
 	lastSequenceNumber uint16
 	lastRTP            uint32
 	lastNTP            time.Time
+
+	// H264 keyframe preheat cache. It is allocated only when the server has
+	// H264KeyframePreheat enabled and the format is H264, and remains nil
+	// (therefore disabled) in every other case.
+	preheat *h264PreheatCache
 }
 
 func (ssf *serverStreamFormat) initialize() error {
@@ -53,6 +58,12 @@ func (ssf *serverStreamFormat) initialize() error {
 	}
 
 	ssf.formatForDesc = cloneFormatShallow(ssf.format)
+
+	if ssf.ssm.st.Server.H264KeyframePreheat {
+		if _, ok := ssf.format.(*format.H264); ok {
+			ssf.preheat = &h264PreheatCache{}
+		}
+	}
 
 	return nil
 }
@@ -100,6 +111,13 @@ func (ssf *serverStreamFormat) stats() ServerStreamStatsFormat {
 }
 
 func (ssf *serverStreamFormat) writePacketRTP(pkt *rtp.Packet, ntp time.Time) error {
+	// feed the H264 keyframe preheat cache before rewriting the SSRC with
+	// the local one, so that a publisher SSRC switch can be detected.
+	// The cache stores its own deep copies and never modifies the packet.
+	if ssf.preheat != nil {
+		ssf.preheat.process(pkt, ntp)
+	}
+
 	pkt.SSRC = ssf.localSSRC
 
 	maxPlainPacketSize := ssf.ssm.st.Server.MaxPacketSize

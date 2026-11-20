@@ -112,6 +112,17 @@ type Server struct {
 	MaxPacketSize int
 	// disable automatic RTCP sender reports.
 	DisableRTCPSenderReports bool
+	// enables H264 keyframe preheat for new readers.
+	// When enabled, the server keeps, for every H264 track, the most recent
+	// valid SPS/PPS NALUs and the RTP packets of the most recent complete
+	// IDR access unit (including fragmented ones). A reader that starts
+	// playing while the stream is already running first receives this cached
+	// decodable group, and then the live packet flow, so it does not have
+	// to wait for the next IDR to render the first frame.
+	// Only unicast readers (TCP and UDP) are preheated; UDP-multicast
+	// readers receive the shared multicast flow as usual.
+	// It defaults to false.
+	H264KeyframePreheat bool
 	// authentication methods.
 	// It defaults to plain and digest+MD5.
 	AuthMethods []auth.Method
